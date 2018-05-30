@@ -101,3 +101,6 @@ ENV/
 .mypy_cache/
 
 .idea
+
+ffmpeg-linux64-v3.3.1
+running.mp4
