@@ -6,6 +6,7 @@ import torch.optim as optim
 from torch.autograd import Variable
 import numpy as np
 import pdb
+from LSTMmodule import LSTMModule
 
 class RelationModule(torch.nn.Module):
     # this is the naive implementation of the n-frame relation module, as num_frames == num_frames_relation
@@ -14,13 +15,15 @@ class RelationModule(torch.nn.Module):
         self.num_frames = num_frames
         self.num_class = num_class
         self.img_feature_dim = img_feature_dim
-        self.classifier = self.fc_fusion()
-    def fc_fusion(self):
+        self.classifier = self.fc_fusion(64)
+    def fc_fusion(self, batch_size):
         # naive concatenate
         num_bottleneck = 512
         classifier = nn.Sequential(
                 nn.ReLU(),
-                nn.Linear(self.num_frames * self.img_feature_dim, num_bottleneck),
+		LSTMModule(self.num_frames * self.img_feature_dim, num_bottleneck, batch_size, 
+					self.num_frames, self.img_feature_dim),
+                # nn.Linear(self.num_frames * self.img_feature_dim, num_bottleneck),
                 nn.ReLU(),
                 nn.Linear(num_bottleneck,self.num_class),
                 )
