@@ -193,6 +193,12 @@ class TSN(nn.Module):
                 # later BN's are frozen
                 if not self._enable_pbn or bn_cnt == 1:
                     bn.extend(list(m.parameters()))
+            elif isinstance(m, torch.nn.modules.rnn.LSTM) or isinstance(m, torch.nn.modules.rnn.RNN) or isinstance(m, torch.nn.modules.rnn.GRU):
+                    ps = list(m.parameters())
+                    normal_weight.append(ps[0])
+                    normal_weight.append(ps[1])
+                    normal_bias.append(ps[2])
+                    normal_bias.append(ps[3])
             elif len(m._modules) == 0:
                 if len(list(m.parameters())) > 0:
                     raise ValueError("New atomic module type: {}. Need to give it a learning policy".format(type(m)))
