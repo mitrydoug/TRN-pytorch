@@ -104,3 +104,7 @@ ENV/
 
 ffmpeg-linux64-v3.3.1
 running.mp4
+sample_data
+model
+log
+pretrain
