@@ -21,10 +21,10 @@ class RelationModule(torch.nn.Module):
         num_bottleneck = 512
         classifier = nn.Sequential(
                 nn.ReLU(),
-		LSTMModule(self.num_frames * self.img_feature_dim, num_bottleneck, batch_size, 
+		LSTMModule(self.num_frames * self.img_feature_dim, num_bottleneck, 
 					self.num_frames, self.img_feature_dim),
                 # nn.Linear(self.num_frames * self.img_feature_dim, num_bottleneck),
-                nn.ReLU(),
+                # nn.ReLU(),
                 nn.Linear(num_bottleneck,self.num_class),
                 )
         return classifier
@@ -53,12 +53,15 @@ class RelationModuleMultiScale(torch.nn.Module):
         self.num_frames = num_frames
         num_bottleneck = 256
         self.fc_fusion_scales = nn.ModuleList() # high-tech modulelist
+        # lstm_module = LSTMModule(0, num_bottleneck, 0, self.img_feature_dim) # for shared weights
         for i in range(len(self.scales)):
             scale = self.scales[i]
             fc_fusion = nn.Sequential(
                         nn.ReLU(),
-                        nn.Linear(scale * self.img_feature_dim, num_bottleneck),
-                        nn.ReLU(),
+			# lstm_module, # for shared weights
+			# LSTMModule(scale * self.img_feature_dim, num_bottleneck, scale, self.img_feature_dim), # for different weights
+                        nn.Linear(scale * self.img_feature_dim, num_bottleneck), # for vanilla multi-scale TRN
+                        nn.ReLU(), # for vanilla multi-scale TRN
                         nn.Linear(num_bottleneck, self.num_class),
                         )
 
