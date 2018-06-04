@@ -259,10 +259,13 @@ class TSN(nn.Module):
         # modify parameters, assume the first blob contains the convolution kernels
         params = [x.clone() for x in conv_layer.parameters()]
         kernel_size = params[0].size()
-        new_kernel_size = kernel_size[:1] + (2 * self.new_length, ) + kernel_size[2:]
-        new_kernels = params[0].data.mean(dim=1, keepdim=True).expand(new_kernel_size).contiguous()
+        # flow channels
+        scale = 1e-4
+        flow_kernel = torch.nn.randn(*(kernel_size[:1] + (4,) + kernel_size[2:]), requires_grad=True)
+        # there are going to be 7 channels: R G B vx vy ax ay
+        new_kernels = torch.cat((params[0], flow_kernel), dim=1).contiguous()
 
-        new_conv = nn.Conv2d(2 * self.new_length, conv_layer.out_channels,
+        new_conv = nn.Conv2d(int(kernel_size[1])+4, conv_layer.out_channels,
                              conv_layer.kernel_size, conv_layer.stride, conv_layer.padding,
                              bias=True if len(params) == 2 else False)
         new_conv.weight.data = new_kernels
