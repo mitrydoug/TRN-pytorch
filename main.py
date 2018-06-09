@@ -28,6 +28,7 @@ def main():
 
     categories, args.train_list, args.val_list, args.root_path, prefix = datasets_video.return_dataset(args.dataset, args.modality)
     num_class = len(categories)
+    print("num_class: " + str(num_class))
 
 
     args.store_name = '_'.join(['TRN', args.dataset, args.modality, args.arch, args.consensus_type, 'segment%d'% args.num_segments])
@@ -69,9 +70,9 @@ def main():
     else:
         normalize = IdentityTransform()
 
-    if args.modality == 'RGB':
+    if args.modality == 'Flow' or args.modality == 'RGB':
         data_length = 1
-    elif args.modality in ['Flow', 'RGBDiff']:
+    elif args.modality in ['RGBDiff']:
         data_length = 5
 
     train_loader = torch.utils.data.DataLoader(
@@ -87,6 +88,20 @@ def main():
                    ])),
         batch_size=args.batch_size, shuffle=True,
         num_workers=args.workers, pin_memory=True)
+    
+    print("Creating val_loader:")
+    print("args.root_path: " + str(args.root_path))
+    print("args.val_list: " + str(args.val_list))
+    print("args.num_segments: " + str(args.num_segments))
+    print("data_length: " + str(data_length))
+    print("modality: " + str(args.modality))
+    print("prefix: " + str(prefix))
+    print("scale_size: " + str(int(scale_size)))
+    print("crop_size: " + str(crop_size))
+    print("args.arch: " + str(args.arch))
+    print("args.batch_size: " + str(args.batch_size))
+    print("args.workers: " + str(args.workers))
+    print("")
 
     val_loader = torch.utils.data.DataLoader(
         TSNDataSet(args.root_path, args.val_list, num_segments=args.num_segments,
@@ -241,7 +256,7 @@ def train(train_loader, model, criterion, optimizer, epoch, log):
 
 
 
-def validate(val_loader, model, criterion, iter, log):
+def validate(val_loader, model, criterion, iter, log = "skip"):
     batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
@@ -251,13 +266,26 @@ def validate(val_loader, model, criterion, iter, log):
     model.eval()
 
     end = time.time()
+    
     for i, (input, target) in enumerate(val_loader):
         target = target.cuda(async=True)
         input_var = torch.autograd.Variable(input, volatile=True)
         target_var = torch.autograd.Variable(target, volatile=True)
-
+#         print("input_var: " + str(input_var.shape))
+#         print("target_var: " + str(target_var.shape))
+        
+        
         # compute output
         output = model(input_var)
+#         print("i: " + str(i))
+#         print("output:")
+#         print(type(output))
+#         print(output.shape)
+#         print("target_var:")
+#         print(type(target_var))
+#         print(target_var.shape)
+#         print(target_var)
+        
         loss = criterion(output, target_var)
 
         # measure accuracy and record loss
@@ -266,10 +294,30 @@ def validate(val_loader, model, criterion, iter, log):
         losses.update(loss.data[0], input.size(0))
         top1.update(prec1[0], input.size(0))
         top5.update(prec5[0], input.size(0))
+        
+        # Only if strictly evaluation mode
+        if args.evaluate:
+            if i == 0:
+                topk_guesses = return_topk_guesses(output.data, target, topk = (1,5))
+#                 print("topk_guesses: " + str(topk_guesses.shape))
+                topk_guesses_all = topk_guesses
+#                 print("topk_guesses_all: "+ str(topk_guesses_all.shape))
+                
+                targets = target
+#                 print("targets: " + str(targets.shape))
+            else:
+                topk_guesses = return_topk_guesses(output.data, target, topk = (1,5))
+#                 print("topk_guesses: " + str(topk_guesses.shape))
+                topk_guesses_all = torch.cat((topk_guesses_all, topk_guesses), 0)
+#                 print("topk_guesses_all: " + str(topk_guesses_all.shape))
+                
+                targets = torch.cat((targets, target), 0)
+#                 print("targets: " + str(targets.shape))
 
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
+#         print("")
 
         if i % args.print_freq == 0:
             output = ('Test: [{0}/{1}]\t'
@@ -280,17 +328,37 @@ def validate(val_loader, model, criterion, iter, log):
                    i, len(val_loader), batch_time=batch_time, loss=losses,
                    top1=top1, top5=top5))
             print(output)
-            log.write(output + '\n')
-            log.flush()
+            if log == "skip":
+                pass
+            else:
+                log.write(output + '\n')
+                log.flush()
 
     output = ('Testing Results: Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f} Loss {loss.avg:.5f}'
           .format(top1=top1, top5=top5, loss=losses))
     print(output)
     output_best = '\nBest Prec@1: %.3f'%(best_prec1)
     print(output_best)
-    log.write(output + ' ' + output_best + '\n')
-    log.flush()
-
+    if log == "skip":        
+        pass
+    else:
+        log.write(output + ' ' + output_best + '\n')
+        log.flush()
+        
+    # Exclusively in validation, save the predictions and labels tensors
+    if args.evaluate:
+        topk_guesses_all_numpy = topk_guesses_all.cpu().numpy()
+        targets_numpy = targets.cpu().numpy()
+#         print("topk_guesses_all_numpy:")
+#         print(type(topk_guesses_all_numpy))
+#         print(topk_guesses_all_numpy.shape)
+#         print("targets_numpy:")
+#         print(type(targets_numpy))
+#         print(targets_numpy.shape)
+        
+        np.save(args.save_scores + "topk_guesses_all.npy", topk_guesses_all_numpy)
+        np.save(args.save_scores + "targets_numpy.npy", targets_numpy)
+        
     return top1.avg
 
 
@@ -330,6 +398,17 @@ def adjust_learning_rate(optimizer, epoch, lr_steps):
         param_group['lr'] = lr * param_group['lr_mult']
         param_group['weight_decay'] = decay * param_group['decay_mult']
 
+def return_topk_guesses(output, target, topk = (1,)):
+    """Returns top guesses for s"""
+    maxk = max(topk)
+    batch_size = target.size(0)
+
+    _, pred = output.topk(maxk, 1, True, True)
+    #print("pred:")
+    #print(pred.shape)
+
+    return pred
+
 
 def accuracy(output, target, topk=(1,)):
     """Computes the precision@k for the specified values of k"""
@@ -338,7 +417,10 @@ def accuracy(output, target, topk=(1,)):
 
     _, pred = output.topk(maxk, 1, True, True)
     pred = pred.t()
+    #print(pred.shape)
+    
     correct = pred.eq(target.view(1, -1).expand_as(pred))
+    #print(correct.shape)
 
     res = []
     for k in topk:

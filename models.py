@@ -25,7 +25,7 @@ class TSN(nn.Module):
             raise ValueError("Only avg consensus can be used after Softmax")
 
         if new_length is None:
-            self.new_length = 1 if modality == "RGB" else 5
+            self.new_length = 1 if modality in ["RGB", "flow"] else 5
         else:
             self.new_length = new_length
         if print_spec == True:
@@ -41,7 +41,6 @@ class TSN(nn.Module):
             """.format(base_model, self.modality, self.num_segments, self.new_length, consensus_type, self.dropout, self.img_feature_dim)))
 
         self._prepare_base_model(base_model)
-
         feature_dim = self._prepare_tsn(num_class)
 
         if self.modality == 'Flow':
@@ -67,6 +66,8 @@ class TSN(nn.Module):
 
     def _prepare_tsn(self, num_class):
         feature_dim = getattr(self.base_model, self.base_model.last_layer_name).in_features
+        #print('ff',feature_dim)
+        #print('num_class', num_class)
         if self.dropout == 0:
             setattr(self.base_model, self.base_model.last_layer_name, nn.Linear(feature_dim, num_class))
             self.new_fc = None
@@ -74,6 +75,8 @@ class TSN(nn.Module):
             setattr(self.base_model, self.base_model.last_layer_name, nn.Dropout(p=self.dropout))
             if self.consensus_type in ['TRN','TRNmultiscale']:
                 # create a new linear layer as the frame feature
+                #print('abc', feature_dim)
+                #print('bdc', self.img_feature_dim)
                 self.new_fc = nn.Linear(feature_dim, self.img_feature_dim)
             else:
                 # the default consensus types in TSN
@@ -108,12 +111,10 @@ class TSN(nn.Module):
             self.base_model = getattr(model_zoo, base_model)()
             self.base_model.last_layer_name = 'fc'
             self.input_size = 224
-            self.input_mean = [104, 117, 128]
+            self.input_mean = [104, 117, 128, 0, 0, 0, 0]
             self.input_std = [1]
 
-            if self.modality == 'Flow':
-                self.input_mean = [128]
-            elif self.modality == 'RGBDiff':
+            if self.modality == 'RGBDiff':
                 self.input_mean = self.input_mean * (1 + self.new_length)
         elif base_model == 'InceptionV3':
             import model_zoo
@@ -211,23 +212,37 @@ class TSN(nn.Module):
         ]
 
     def forward(self, input):
+        #print('g', input.shape)
         sample_len = (3 if self.modality == "RGB" else 2) * self.new_length
+        if self.modality == 'Flow':
+            sample_len = 7
 
         if self.modality == 'RGBDiff':
             sample_len = 3 * self.new_length
             input = self._get_diff(input)
 
+        #print('a', sample_len)
+        #print('p', input.size()[-2:])
+        #print('pp', input.size())
+        #print('u', input.shape)
+        #print('b', input.view((-1, sample_len) + input.size()[-2:]).shape)
         base_out = self.base_model(input.view((-1, sample_len) + input.size()[-2:]))
+        #print(base_out.shape)
 
         if self.dropout > 0:
             base_out = self.new_fc(base_out)
+
+        #print('c', base_out.shape)
+        #print('x', f'num_segments: {self.num_segments}')
 
         if not self.before_softmax:
             base_out = self.softmax(base_out)
         if self.reshape:
             base_out = base_out.view((-1, self.num_segments) + base_out.size()[1:])
 
+        #print('c', base_out.shape)
         output = self.consensus(base_out)
+        #print('d', output.shape)
         return output.squeeze(1)
 
     def _get_diff(self, input, keep_rgb=False):
@@ -259,10 +274,18 @@ class TSN(nn.Module):
         # modify parameters, assume the first blob contains the convolution kernels
         params = [x.clone() for x in conv_layer.parameters()]
         kernel_size = params[0].size()
-        new_kernel_size = kernel_size[:1] + (2 * self.new_length, ) + kernel_size[2:]
-        new_kernels = params[0].data.mean(dim=1, keepdim=True).expand(new_kernel_size).contiguous()
+        #print('zzz', kernel_size)
+        # flow channels
+        scale = 1e-4
+        flow_kernel = torch.randn(*(kernel_size[:1] + (4,) + kernel_size[2:]))
+        # there are going to be 7 channels: R G B vx vy ax ay
+        new_kernels = torch.cat((params[0].data, flow_kernel), dim=1).contiguous()
+        #print('ggg', new_kernels.shape)
 
-        new_conv = nn.Conv2d(2 * self.new_length, conv_layer.out_channels,
+        #print('m', int(kernel_size[1]+4))
+        #print('n', conv_layer.out_channels, conv_layer.kernel_size)
+        #print('o', len(params))
+        new_conv = nn.Conv2d(int(kernel_size[1])+4, conv_layer.out_channels,
                              conv_layer.kernel_size, conv_layer.stride, conv_layer.padding,
                              bias=True if len(params) == 2 else False)
         new_conv.weight.data = new_kernels
@@ -272,6 +295,7 @@ class TSN(nn.Module):
 
         # replace the first convlution layer
         setattr(container, layer_name, new_conv)
+        self._new_conv = new_conv
         return base_model
 
     def _construct_diff_model(self, base_model, keep_rgb=False):

@@ -47,34 +47,49 @@ class TSNDataSet(data.Dataset):
     def _load_image(self, directory, idx):
         if self.modality == 'RGB' or self.modality == 'RGBDiff':
             try:
-                return [Image.open(os.path.join(self.root_path, directory, self.image_tmpl.format(idx))).convert('RGB')]
+                x = [Image.open(os.path.join(self.root_path, directory, self.image_tmpl.format(idx))).convert('RGB')]
+                print(type(x[0]))
+                return x
             except Exception:
                 print('error loading image:', os.path.join(self.root_path, directory, self.image_tmpl.format(idx)))
                 return [Image.open(os.path.join(self.root_path, directory, self.image_tmpl.format(1))).convert('RGB')]
         elif self.modality == 'Flow':
             try:
-                #idx_skip = 1 + (idx-1)*5
-                flow = Image.open(os.path.join(self.root_path, directory, self.image_tmpl.format(idx))).convert('RGB')
+                rgb = Image.open(
+                    os.path.join(self.root_path, directory, self.image_tmpl.format(idx))
+                    ).convert('RGB')
+
             except Exception:
                 print('error loading flow file:', os.path.join(self.root_path, directory, self.image_tmpl.format(idx)))
-                flow = Image.open(os.path.join(self.root_path, directory, self.image_tmpl.format(1))).convert('RGB')
-            # the input flow file is RGB image with (flow_x, flow_y, blank) for each channel
-            flow_x, flow_y, _ = flow.split()
-            x_img = flow_x.convert('L')
-            y_img = flow_y.convert('L')
+                rgb = Image.open(
+                    os.path.join(self.root_path, directory, self.image_tmpl.format(1))
+                    ).convert('RGB')
 
-            return [x_img, y_img]
+            try:
+                fx = Image.open(
+                    os.path.join(self.root_path, directory, f'fx_{idx:05}.jpg')
+                    ).convert('RGB')
+
+            except Exception:
+                print('error loading flow file:', os.path.join(self.root_path, directory, f'flow_{idx:05}.jpg'))
+                fx = Image.fromarray(np.zeros((256, 256, 3), dtype=np.uint8))
+
+            try:
+                fy = Image.open(
+                    os.path.join(self.root_path, directory, f'fy_{idx:05}.jpg')
+                    ).convert('RGB')
+
+            except Exception:
+                print('error loading flow file:', os.path.join(self.root_path, directory, f'flow_{idx:05}.jpg'))
+                fy = Image.fromarray(np.zeros((256, 256, 3), dytpe=np.uint8))
+
+            return [(rgb, fx, fy)]
 
     def _parse_list(self):
         # check the frame number is large >3:
         # usualy it is [video_id, num_frames, class_idx]
         tmp = [x.strip().split(' ') for x in open(self.list_file)]
         tmp = [item for item in tmp if int(item[1])>=3]
-
-        if self.modality == 'Flow':
-            # flow model has one frame less
-            for i in range(len(tmp)):
-                tmp[i][1] = str(int(tmp[i][1]) - 1)
 
         self.video_list = [VideoRecord(item) for item in tmp]
         print('video number:%d'%(len(self.video_list)))
