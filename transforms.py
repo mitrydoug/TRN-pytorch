@@ -39,7 +39,8 @@ class GroupCenterCrop(object):
         self.worker = torchvision.transforms.CenterCrop(size)
 
     def __call__(self, img_group):
-        return [self.worker(img) for img in img_group]
+        return [(self.worker(rgb), self.worker(fx), self.worker(fy))
+                for (rgb, fx, fy) in img_group]
 
 
 class GroupRandomHorizontalFlip(object):
@@ -51,11 +52,10 @@ class GroupRandomHorizontalFlip(object):
     def __call__(self, img_group, is_flow=False):
         v = random.random()
         if v < 0.5:
-            ret = [img.transpose(Image.FLIP_LEFT_RIGHT) for img in img_group]
-            if self.is_flow:
-                for i in range(0, len(ret), 2):
-                    ret[i] = ImageOps.invert(ret[i])  # invert flow pixel values when flipping
-            return ret
+            return [(rgb.transpose(Image.FLIP_LEFT_RIGHT),
+                     ImageOps.invert(fx.transpose(Image.FLIP_LEFT_RIGHT)),
+                      fy.transpose(Image.FLIP_LEFT_RIGHT))
+                    for (rgb, fx, fy) in img_group]
         else:
             return img_group
 
@@ -89,7 +89,8 @@ class GroupScale(object):
         self.worker = torchvision.transforms.Resize(size, interpolation)
 
     def __call__(self, img_group):
-        return [self.worker(img) for img in img_group]
+        return [(self.worker(rgb), self.worker(fx), self.worker(fy))
+                for (rgb, fx, fy) in img_group]
 
 
 class GroupOverSample(object):
@@ -141,12 +142,17 @@ class GroupMultiScaleCrop(object):
 
     def __call__(self, img_group):
 
-        im_size = img_group[0].size
+        im_size = img_group[0][0].size
 
         crop_w, crop_h, offset_w, offset_h = self._sample_crop_size(im_size)
-        crop_img_group = [img.crop((offset_w, offset_h, offset_w + crop_w, offset_h + crop_h)) for img in img_group]
-        ret_img_group = [img.resize((self.input_size[0], self.input_size[1]), self.interpolation)
-                         for img in crop_img_group]
+        crop_img_group = [(rgb.crop((offset_w, offset_h, offset_w + crop_w, offset_h + crop_h)),
+                            fx.crop((offset_w, offset_h, offset_w + crop_w, offset_h + crop_h)),
+                            fy.crop((offset_w, offset_h, offset_w + crop_w, offset_h + crop_h)))
+                            for (rgb, fx, fy) in img_group]
+        ret_img_group = [(rgb.resize((self.input_size[0], self.input_size[1]), self.interpolation),
+                           fx.resize((self.input_size[0], self.input_size[1]), self.interpolation),
+                           fy.resize((self.input_size[0], self.input_size[1]), self.interpolation))
+                           for (rgb, fx, fy) in crop_img_group]
         return ret_img_group
 
     def _sample_crop_size(self, im_size):
@@ -256,12 +262,17 @@ class Stack(object):
         self.roll = roll
 
     def __call__(self, img_group):
-        if img_group[0].mode == 'L':
+        if img_group[0][0].mode == 'L':
+            print('what!')
             return np.concatenate([np.expand_dims(x, 2) for x in img_group], axis=2)
-        elif img_group[0].mode == 'RGB':
+        elif img_group[0][0].mode == 'RGB':
             if self.roll:
-                return np.concatenate([np.array(x)[:, :, ::-1] for x in img_group], axis=2)
+                return np.concatenate(sum(([np.array(rgb)[:, :, ::-1],
+                                            np.array(fx)[:,:,:2],
+                                            np.array(fy)[:,:,:2]]
+                                           for rgb, fx, fy in img_group), []), axis=2)
             else:
+                print('whatt!')
                 return np.concatenate(img_group, axis=2)
 
 

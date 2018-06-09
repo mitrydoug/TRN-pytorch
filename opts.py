@@ -7,6 +7,7 @@ parser.add_argument('--val_list', type=str, default="")
 parser.add_argument('--root_path', type=str, default="")
 parser.add_argument('--store_name', type=str, default="")
 parser.add_argument('--exp_name', '--experiment_name', type=str, default='')
+parser.add_argument('--save_scores', type = str, default = "")
 # ========================= Model Configs ==========================
 parser.add_argument('--arch', type=str, default="BNInception")
 parser.add_argument('--num_segments', type=int, default=3)
@@ -39,7 +40,7 @@ parser.add_argument('--no_partialbn', '--npb', default=False, action="store_true
 # ========================= Monitor Configs ==========================
 parser.add_argument('--print-freq', '-p', default=20, type=int,
                     metavar='N', help='print frequency (default: 10)')
-parser.add_argument('--eval-freq', '-ef', default=5, type=int,
+parser.add_argument('--eval-freq', '-ef', default=1, type=int,
                     metavar='N', help='evaluation frequency (default: 5)')
 
 

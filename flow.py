@@ -6,6 +6,11 @@ import cv2
 import numpy as np
 from queue import Queue
 
+import PIL
+from PIL import Image
+
+NUM_THREADS=30
+output_queue = Queue()
 
 class FileVideoStream:
     def __init__(self, path, queueSize=90):
@@ -48,49 +53,87 @@ class FileVideoStream:
                 self.Q.put(frame)
 
     def read(self):
-        # return next frame in the queue
-        while self.Q.qsize() == 0:
-            time.sleep(0.001)
         return self.Q.get()
 
     def more(self):
         # return True if there are still frames in the queue
-        return not self.stopped
+        while self.Q.qsize() == 0:
+            if self.stopped:
+                if self.Q.qsize() == 0:
+                    return False
+            time.sleep(0.001)
+        return True
 
     def stop(self):
         # indicate that the thread should be stopped
         self.stopped = True
         self.stream.release()
 
-def compute_flow_for_video(video_fn):
-    def avg(fm):
-        return (fm[::2,::2] + fm[1::2,1::2]) / 2.
+def compute_flow_for_video(root, split, fn):
+    def down(img):
+        return np.uint8((img[::2,::2] + img[1::2,1::2]) / 2.)
+    video_path = f'{root}{split}/{fn}'
     flows = []
-    fvs = FileVideoStream(video_fn).start()
-    frame1 = fvs.read()
-    prvs = avg(cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY))
+    fvs = FileVideoStream(video_path).start()
+    if fvs.more():
+        frame1 = down(fvs.read())
+    else:
+        print(f'Error reading: {video_path}')
+        return
+    prvs = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
     while fvs.more():
-        frame2 = fvs.read()
-        next = avg(cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY))
+        frame2 = down(fvs.read())
+        next = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
         flow = cv2.calcOpticalFlowFarneback(
-                prvs, next, None, 0.5, 3, 8, 2, 5, 1.2,
-                cv2.OPTFLOW_USE_INITIAL_FLOW)
+                prvs, next, None, 0.5, 3, 8, 2, 5, 1.1, 0)
+        flow[np.isnan(flow)] = 0.
         flows.append(flow)
         prvs = next
-    fvs.stop()
-    cv2.destroyAllWindows()
-    # assume motion continues
     flows.append(flows[-1])
-    accels = []
-    for i, flow in enumerate(flows[:-1]):
-        next = flows[i+1]
-        accels.append(next-flow)
-    accels.append(accels[-1])
-    result = [np.concatenate([f, a], axis=2) for f, a in zip(flows, accels)]
-    return result
+    
+    accels = [np.zeros_like(flows[0])]
+    for i, flow in enumerate(flows[1:]):
+        prev = flows[i]
+        rows = np.maximum(np.minimum(
+            np.arange(128).reshape((128, 1)) + prev[:,:,0], 127), 0).astype(np.uint8)
+        cols = np.maximum(np.minimum(
+            np.arange(128).reshape((1, 128)) + prev[:,:,1], 127), 0).astype(np.uint8)
+        flow = flow[rows, cols]
+        accel = flow-prev
+        accels.append(accel)
+
+    zs = np.zeros((128,128,1))
+    for i, (flow, acel) in enumerate(zip(flows, accels)):
+        flow = np.minimum(np.maximum((flow + 15.) * 8, 0), 255)
+        acel = np.minimum(np.maximum((acel + 30.) * 4, 0), 255)
+        x_flow = np.concatenate((flow[:,:,[0]], acel[:,:,[0]], zs), axis=2).astype(np.uint8)
+        y_flow = np.concatenate((flow[:,:,[1]], acel[:,:,[1]], zs), axis=2).astype(np.uint8)
+        Image.fromarray(x_flow).resize((256, 256), resample=PIL.Image.BILINEAR).save(
+                f'{root}{split}/{fn[:-4]}/fx_{i+1:05}.jpg')
+        Image.fromarray(y_flow).resize((256, 256), resample=PIL.Image.BILINEAR).save(
+                f'{root}{split}/{fn[:-4]}/fy_{i+1:05}.jpg')
 
 root = None
 backup = None
+
+def process_list(root, split, lines, labels):
+    for line in lines:
+        fn, label, _, _ = line.split(',')
+        assert (fn[-4:] == '.mp4')
+        #num_frames = len([x for x in os.listdir(f'{root}{split}/{fn[:-4]}') if 'flow' in x])
+        #if num_frames > 70:
+        #    continue
+        #x = np.load(f'{root}{split}/{fn[:-4]}/flow.npz')['arr_0']
+        #compute_flow_for_video(root, split, fn)
+        #if frames is None:
+        #    continue
+        #for i in range(frames.shape[3]):
+        #    np.savez_compressed(f'{root}{split}/{fn[:-4]}/flow_{i+1:05}.npz', frames[:,:,:,i])
+        #num_flow = len([x for x in os.listdir(f'{root}{split}/{fn[:-4]}') if 'flow' in x])
+        #np.savez_compressed(f'{root}{split}/{fn[:-4]}/flow.npz', precision(frames))
+        #num_frames = len([x for x in os.listdir(f'{root}{split}/{fn[:-4]}') if 'flow' not in x])
+        #output_queue.put(f'{split}/{fn[:-4]} {num_frames} {labels[label]}\n')
+    return
 
 def process_split(split):
     split_file = f'{root}{split}Set.csv'
@@ -102,21 +145,29 @@ def process_split(split):
     i = 0
     
     with open(split_file, 'r') as f:
-        with open(frames_file, 'w') as g:
-            for line in f:
-                fn, label, _, _ = line.split(',')
-                assert (fn[-4:] == '.mp4')
-                frames = compute_flow_for_video(f'{root}{split}/{fn}')
-                for j, frame in enumerate(frames):
-                    frame_fn = f'flow_{j+1:05}.npy'
-                    if not os.path.isdir(f'{root}{split}/{fn[:-4]}/{frame_fn}'):
-                        if backup is not None and \
-                                os.path.isdir(f'{backup}{split}/{fn[:-4]}/{frame_fn}'):
-                            os.system(f'cp {backup}{split}/{fn[:-4]}/{frame_fn} {root}{split}/{fn[:-4]}/{frame_fn}')
-                        else:
-                            np.save(f'{root}{split}/{fn[:-4]}/{frame_fn}', frame)
-                i += 1
-                print('%5d: %s' % (i, fn))
+        lines = f.readlines()
+
+    threads = [None] * NUM_THREADS
+
+    i, M = 0, 100
+    while i < len(lines):
+        for j, thread in enumerate(threads):
+            if thread is None or not thread.is_alive():
+                threads[j] = Thread(target=process_list, args=(root, split, lines[i:i+M], labels))
+                threads[j].start()
+                print(f'Scheduled lines [{i}, {i+M})')
+                i += M
+                break
+        time.sleep(0.1)
+
+    for thread in threads:
+        if thread is not None:
+            thread.join()
+
+    #with open(frames_file, 'w') as g:
+    #    while output_queue.qsize() > 0:
+    #        line = output_queue.get()
+    #        g.write(line)
 
 def main():
     global root, backup
